@@ -23,11 +23,11 @@ from torch.utils.data import DataLoader
 parser = argparse.ArgumentParser()
 parser.add_argument('--method', type=str, required=True,
                     choices=['PtO','DBB','RS','PGB','PGC','SPO','PFYL'])
-parser.add_argument('--lambd',  type=float, default=5.0)
+parser.add_argument('--lambd',  type=float, default=5.0)   # Hyper-para for DBB
 parser.add_argument('--sigma',  type=float, default=1.0,
-                    help='RS/PFYL: noise amplitude sigma')
+                    help='RS/PFYL: noise amplitude sigma')  # Hyper-para for RS and PFYL
 parser.add_argument('--h',      type=float, default=0.05,
-                    help='PGB/PGC: finite difference step size h')
+                    help='PGB/PGC: finite difference step size h')  # Hyper-para for PGB and PGC
 parser.add_argument('--epochs', type=int,   default=10)
 parser.add_argument('--lr',     type=float, default=1e-3)
 parser.add_argument('--batch',  type=int,   default=8)
@@ -42,13 +42,12 @@ args = parser.parse_args()
 
 # ── Paths ─────────────────────────────────────────────────────────────
 PROJECT      = os.path.expanduser("~/1DFL")
-AMAZON_DIR   = f"{PROJECT}/amazon_instances"
+AMAZON_DIR   = f"{PROJECT}/amazon_instances_n4"
 CONFIG_TRAIN = f"{AMAZON_DIR}/configs_train"
 CONFIG_VAL   = f"{AMAZON_DIR}/configs_val"
 CONFIG_TEST  = f"{AMAZON_DIR}/configs_test"
 DATASET_DIR  = f"{AMAZON_DIR}/dataset"
 MODEL_DIR    = f"{PROJECT}/{args.output_dir}" # input output dir name
-# MODEL_DIR    = f"{PROJECT}/saved_models4"  # modify
 WORK_DIR     = f"/tmp/fstsp_{args.method}_{os.getpid()}" 
 LKH_PATH     = f"{PROJECT}/LKH"
 
@@ -57,8 +56,8 @@ os.makedirs(WORK_DIR,  exist_ok=True)
 os.chmod(LKH_PATH, 0o755)
 
 # ── Constants ─────────────────────────────────────────────────────────
-n          = 9
-n_orig     = n + 2
+n          = 4  # number of customers
+n_orig     = n + 2 # depot, customers, dummy depot
 SCALE      = 10
 BATCH_SIZE = args.batch
 NUM_EPOCHS = args.epochs
@@ -154,11 +153,11 @@ def z_star_amazon(t_hat, struct, config_name, suffix="pred"):
     with open(out_par, 'w') as f:
         f.write("SPECIAL\n")
         f.write(f"PROBLEM_FILE = {out_tspmd.resolve()}\n")
-        f.write("MAX_TRIALS = 1000\nRUNS = 1\nTIME_LIMIT = 10\n")
+        f.write("MAX_TRIALS = 10000\nRUNS = 1\nTIME_LIMIT = 1\n")  # small instance uses 1s
         f.write(f"TOUR_FILE = {out_outtour.resolve()}\n")
 
     subprocess.run([LKH_PATH, str(out_par)], capture_output=True,
-                   check=True, timeout=120)
+                   check=True, timeout=60)     # each process uses up to 60s
     return decode_outtour_amazon(str(out_outtour), struct)
 
 
@@ -355,10 +354,12 @@ def compute_regret_proxy(predictor, loader):
 
 
 # ── True regret using LKH-3 ──────────────────────────────────────────
-
+# paper's formula (normalized sum)
 def compute_regret_true(predictor, loader, config_list, config_dir):
     predictor.eval()
-    total=0.0; n_inst=0
+    numerator   = 0.0    # ← change: was total=0.0
+    denominator = 0.0    # ← add
+    n_inst = 0
     print(f"  Computing true regret ({len(config_list)} instances)...",
           flush=True)
     with torch.no_grad():
@@ -372,18 +373,20 @@ def compute_regret_true(predictor, loader, config_list, config_dir):
                 z_hat, _ = solve_one(t_np, cfg, config_dir, suffix=sfx)
                 w_i  = w_hat[i].numpy().astype(np.float64)
                 z_i  = float(z_oracle[i])
-                total += (float(np.dot(w_i, z_hat)) - z_i) / (z_i + 1e-8)
+                pred_cost = float(np.dot(w_i, z_hat))
+                numerator   += (pred_cost - z_i)   # ← change
+                denominator += abs(z_i)             # ← add
                 n_inst += 1
             if n_inst % 100 == 0 and n_inst > 0:
                 print(f"  {n_inst}/{len(config_list)} done", flush=True)
     predictor.train()
-    return total / max(n_inst, 1)
+    return numerator / (denominator + 1e-8)         # ← change
 
 
 # ── Training loop ─────────────────────────────────────────────────────
-# s_hat — context features (hour, day, coordinates) → shape (8, 26)
-# w_hat — realized travel times → shape (8, 242)
-# z_hat_oracle — oracle solution z*(w_hat) → shape (8, 242)
+# s_hat — context features (hour, day, coordinates) → shape (8, 26) for n9, (8, 16) for n4
+# w_hat — realized travel times → shape (8, 242) for n9, (8, 72) for n4
+# z_hat_oracle — oracle solution z*(w_hat) → shape (8, 242) for n9, (8, 72) for n4
 # z_oracle — oracle cost w_hat^T z*(w_hat) → shape (8, 1) 
 def train_Algorithm1_amazon(predictor, method, config_list, config_dir,
                              loader_tr,
@@ -397,6 +400,13 @@ def train_Algorithm1_amazon(predictor, method, config_list, config_dir,
     best_regret = float('inf')      # ← track best
     best_epoch  = 0
 
+    # Before epoch loop — evaluate initial model (epoch 0), 160 instances for final training
+    regret0 = compute_regret_true(predictor, loader_ev,
+                                   eval_configs[:160], 
+                                   eval_config_dir)
+    regret_log.append(regret0)
+    print(f"Initial regret: {regret0*100:.2f}%", flush=True)
+    
     print(f"Training {method} for {num_epochs} epochs...", flush=True)
 
     for epoch in range(num_epochs):
@@ -424,9 +434,9 @@ def train_Algorithm1_amazon(predictor, method, config_list, config_dir,
             loss_log.append(loss.item())
 
         # TRUE regret on 80 val instances per epoch — standard formula
-        # Regret_i = (w^T z*(t_hat) - z*) / z*
+        # Regret_i = (w^T z*(t_hat) - z*) / z*, using 80 for hyper-parameter runing, 160 for final training
         regret = compute_regret_true(predictor, loader_ev,
-                                      eval_configs[:80],
+                                      eval_configs[:160],
                                       eval_config_dir)
         regret_log.append(regret)
         print(f"Epoch {epoch+1:2d}/{num_epochs}  "
@@ -438,7 +448,7 @@ def train_Algorithm1_amazon(predictor, method, config_list, config_dir,
         ckpt_path = f"{MODEL_DIR}/ckpt_{method}_ep{epoch+1}.pt"
         torch.save(predictor.state_dict(), ckpt_path)
 
-        # Save best model based on 80-instance regret
+        # Save best model based on 80-val instance regret
         if regret < best_regret:
             best_regret = regret
             best_epoch  = epoch + 1
@@ -452,11 +462,11 @@ def train_Algorithm1_amazon(predictor, method, config_list, config_dir,
     print(f"Loading best model for final evaluation...", flush=True)
     predictor.load_state_dict(torch.load(best_path))
 
-    # Final TRUE regret on 80 test instances
-    print(f"\nComputing FINAL true regret on 80 test instances...",
+    # Final TRUE regret on test_configs_final[:80] test instances for hyper-parameter tuning, 160 instances for final training
+    print(f"\nComputing FINAL true regret on 160 test instances...",
           flush=True)
     true_regret = compute_regret_true(predictor, loader_test_final,
-                                       test_configs_final[:80],
+                                       test_configs_final[:160],
                                        test_config_dir_final)
     print(f"FINAL true regret: {true_regret*100:.4f}%", flush=True)
 
@@ -532,6 +542,6 @@ ll, rl, true_r = train_Algorithm1_amazon(
 
 print(f"\n{'='*50}")
 print(f"Method:             {args.method}")
-print(f"Per-epoch regret (80 instances), final epoch: {rl[-1]*100:.4f}%")
+print(f"Per-epoch regret (160 instances), final epoch: {rl[-1]*100:.4f}%") # 160 instances for final training
 print(f"TRUE  test  regret: {true_r*100:.4f}%")
 print(f"{'='*50}")
