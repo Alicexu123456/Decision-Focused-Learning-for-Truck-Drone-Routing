@@ -1,24 +1,18 @@
 # Decision-Focused-Learning-for-Truck-Drone-Routing
-We've developed a black-box solver to potentially solve all truck-drone routing problem variants with various objectives, which mainly utilizes LKH-3. Then, to consider the uncertain truck/drone travel times, we want to make best decisions before true uncertain parameters are realized. Hence, this project applies Decision-Focused Learning (DFL) methods to solve the simplest truck-drone routing (Flying Sidekick TSP, FSTSP with one truck and one drone). 
-
-Oracle method: current solver
-
-Baseline method (PtO): Decision-blind Predict-then-Optimize makes the best predicion on travel times, then call the solver
-
-Six DFL methods: 
-(1) BlackBox Backprop (DBB). Vlastelica, M., Paulus, A., Musil, V., Martius, G., & Rolínek, M. (2019). Differentiation of blackbox combinatorial solvers.
-(2) Randomized Smoothing (RS). Dalle, G., Baty, L., Bouvier, L., & Parmentier, A. (2022). Learning with combinatorial optimization layers: a probabilistic approach.
-(3) Perturbation Gradient Backward loss (PGB). Gupta, V., & Huang, M. (2024). Decision-focused learning with directional gradients.
-(4) Perturbation Gradient Center loss (PGC). Gupta, V., & Huang, M. (2024). Decision-focused learning with directional gradients.
-(5) Smart Predict-then-Optimize (SPO+). Elmachtoub, A. N., & Grigas, P. (2022). Smart “predict, then optimize”.
-(6) Perturbed Fenchel-Young Loss (PFYL). Berthet, Q., Blondel, M., Teboul, O., Cuturi, M., Vert, J. P., & Bach, F. (2020). Learning with differentiable pertubed optimizers.
-
-
-
-# Decision-Focused Learning for Flying Sidekick TSP (FSTSP)
 
 ## Overview
-This project applies Decision-Focused Learning (DFL) to the Flying Sidekick Traveling Salesman Problem (FSTSP), where a truck and drone coordinate to serve customers under uncertain travel times. Rather than minimizing prediction error (Predict-then-Optimize), DFL methods directly minimize downstream routing cost.
+We employ a unified three-phase black-box solver capable of handling all truck-drone routing variants, built on top of LKH-3. To handle uncertain truck and drone travel times, this project applies Decision-Focused Learning (DFL) to the simplest truck-drone routing variant (the Flying Sidekick TSP (FSTSP) involving one truck and one drone), making routing decisions before true travel times are realized.
+
+## Methods
+- **Oracle**: current black-box solver with true travel times
+- **PtO (baseline)**: Decision-blind Predict-then-Optimize predicts travel times via MSE loss, then calls the solver
+- **Six DFL methods**:
+  1. **DBB** — Vlastelica et al. (2019). Differentiation of blackbox combinatorial solvers.
+  2. **RS** — Dalle et al. (2022). Learning with combinatorial optimization layers: a probabilistic approach.
+  3. **PGB** — Gupta & Huang (2024). Decision-focused learning with directional gradients.
+  4. **PGC** — Gupta & Huang (2024). Decision-focused learning with directional gradients.
+  5. **SPO+** — Elmachtoub & Grigas (2022). Smart "predict, then optimize".
+  6. **PFYL** — Berthet et al. (2020). Learning with differentiable perturbed optimizers.
 
 ## Repository Contents
 - `Amazon_Instance_Preparation.ipynb` — generates FSTSP instances from the Amazon Last-Mile Routing dataset
